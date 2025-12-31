@@ -28,3 +28,4 @@ art>=5.0
 
 # OS operations (built-in)
 # os
+flask
