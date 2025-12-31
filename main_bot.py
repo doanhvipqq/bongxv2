@@ -665,11 +665,12 @@ def main():
     application.add_handler(settings_conv)
     application.add_handler(CallbackQueryHandler(button_callback))
     
+    # Start keep_alive server (Render 24/7)
+    from keep_alive import keep_alive
+    keep_alive()
+    
     # Khởi động bot
     print("Bot dang chay...")
-    print("Telegram Bot: Golike Automation Bot")
-    print("Nhan Ctrl+C de dung bot")
-    
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
