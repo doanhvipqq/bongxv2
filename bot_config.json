@@ -1,0 +1,14 @@
+{
+  "bot_token": "8229532769:AAHW2erj95OU5xxxqFJE7zWMeFnPJvei8U4",
+  "users": {
+    "7509896689": {
+      "threads_token": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOlwvXC9nYXRld2F5LmdvbGlrZS5uZXRcL2FwaVwvbG9naW4iLCJpYXQiOjE3NjUyOTAzNzksImV4cCI6MTc5NjgyNjM3OSwibmJmIjoxNzY1MjkwMzc5LCJqdGkiOiJVemhnWmdCdGV6Mk0wSlQwIiwic3ViIjoyODMzOTUxLCJwcnYiOiJiOTEyNzk5NzhmMTFhYTdiYzU2NzA0ODdmZmYwMWUyMjgyNTNmZTQ4In0.PHI29aNq8AVJSrIH-5KmqzKUc-VBAlHvSapL84-jcx0",
+      "threads_delay_min": 8,
+      "threads_delay_max": 15,
+      "threads_job_limit": 0
+    },
+    "6463176046": {
+      "threads_token": ""
+    }
+  }
+}
