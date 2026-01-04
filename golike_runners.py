@@ -9,14 +9,20 @@ from typing import Callable, Optional
 class GolikeThreadsRunner:
     """Chạy Golike Threads automation"""
     
-    def __init__(self, token: str, callback: Optional[Callable] = None, delay_min: int = 8, delay_max: int = 15):
+    def __init__(self, token: str, callback: Optional[Callable] = None, delay_min: int = 8, delay_max: int = 15, auto_switch_account: bool = True):
         self.token = token
         self.callback = callback
         self.delay_min = delay_min
         self.delay_max = delay_max
+        self.auto_switch_account = auto_switch_account
         self.stop_flag = False
         self.ses = requests.Session()
         self.stats = {'jobs_completed': 0, 'likes': 0, 'follows': 0, 'coins_earned': 0, 'errors': 0}
+        
+        # Multi-account support
+        self.all_accounts = []  # Danh sách tất cả Threads accounts
+        self.current_account_index = 0  # Index của account đang dùng
+        self.accounts_no_jobs = set()  # Track accounts đã hết jobs
         
         # User agents
         self.user_agents = [
@@ -72,9 +78,21 @@ class GolikeThreadsRunner:
                 self.send_update("❌ **LỖI**\n\nKhông tìm thấy Threads account nào!\nVui lòng thêm Threads account vào Golike.")
                 return self.stats
             
-            account_id = check_account['data'][0]['id']
-            account_name = check_account['data'][0]['name']
-            self.send_update(f"📱 **Sử dụng account:** `{account_name}`")
+            # Lưu TẤT CẢ accounts
+            self.all_accounts = check_account['data']
+            
+            # Hiển thị danh sách accounts
+            if len(self.all_accounts) > 1:
+                accounts_list = "📱 **THREADS ACCOUNTS:**\n\n"
+                for idx, acc in enumerate(self.all_accounts, 1):
+                    accounts_list += f"{idx}. `{acc['name']}` (ID: {acc['id']})\n"
+                accounts_list += f"\n{'🔄 Auto-switch: ON' if self.auto_switch_account else '⚠️ Auto-switch: OFF'}"
+                self.send_update(accounts_list)
+            
+            # Bắt đầu với account đầu tiên
+            account_id = self.all_accounts[self.current_account_index]['id']
+            account_name = self.all_accounts[self.current_account_index]['name']
+            self.send_update(f"📱 **Đang dùng account:** `{account_name}` ({self.current_account_index + 1}/{len(self.all_accounts)})")
             
             # Bắt đầu làm jobs
             if max_jobs:
@@ -97,10 +115,53 @@ class GolikeThreadsRunner:
                     
                     if job_response.get('status') != 200:
                         msg = job_response.get('message', 'Không có job')
-                        consecutive_errors += 1
-                        self.send_update(f"⚠️ `{msg}`\n\n⏳ Đợi 10 giây rồi thử lại... (Lỗi {consecutive_errors}/5)")
-                        time.sleep(10)
-                        continue
+                        
+                        # Thử chuyển sang account khác nếu bật auto-switch
+                        if self.auto_switch_account and len(self.all_accounts) > 1:
+                            # Đánh dấu account hiện tại hết jobs
+                            self.accounts_no_jobs.add(self.current_account_index)
+                            
+                            # Thử tìm account khác
+                            if len(self.accounts_no_jobs) < len(self.all_accounts):
+                                # Chuyển sang account tiếp theo
+                                self.current_account_index = (self.current_account_index + 1) % len(self.all_accounts)
+                                
+                                # Skip các account đã hết jobs
+                                while self.current_account_index in self.accounts_no_jobs:
+                                    self.current_account_index = (self.current_account_index + 1) % len(self.all_accounts)
+                                
+                                account_id = self.all_accounts[self.current_account_index]['id']
+                                account_name = self.all_accounts[self.current_account_index]['name']
+                                
+                                self.send_update(
+                                    f"🔄 **CHUYỂN ACCOUNT**\n\n"
+                                    f"Account cũ hết job: `{msg}`\n"
+                                    f"📱 Chuyển sang: `{account_name}` ({self.current_account_index + 1}/{len(self.all_accounts)})\n"
+                                    f"⏳ Thử lấy jobs..."
+                                )
+                                time.sleep(3)  # Đợi 3 giây trước khi lấy job từ account mới
+                                continue
+                            else:
+                                # Tất cả accounts đều hết jobs
+                                self.send_update(
+                                    f"⚠️ **TẤT CẢ ACCOUNTS HẾT JOBS**\n\n"
+                                    f"Đã thử {len(self.all_accounts)} accounts\n"
+                                    f"⏳ Đợi 30 giây rồi reset..."
+                                )
+                                time.sleep(30)
+                                # Reset lại để thử vòng mới
+                                self.accounts_no_jobs.clear()
+                                self.current_account_index = 0
+                                account_id = self.all_accounts[0]['id']
+                                account_name = self.all_accounts[0]['name']
+                                self.send_update(f"🔄 Reset - thử lại với `{account_name}`")
+                                continue
+                        else:
+                            # Logic cũ: không auto-switch hoặc chỉ có 1 account
+                            consecutive_errors += 1
+                            self.send_update(f"⚠️ `{msg}`\n\n⏳ Đợi 10 giây rồi thử lại... (Lỗi {consecutive_errors}/5)")
+                            time.sleep(10)
+                            continue
                     
                     # Reset consecutive errors khi lấy job thành công
                     consecutive_errors = 0
@@ -142,13 +203,18 @@ class GolikeThreadsRunner:
                         
                         job_count += 1
                         
+                        # Reset accounts_no_jobs khi có job thành công
+                        if self.current_account_index in self.accounts_no_jobs:
+                            self.accounts_no_jobs.discard(self.current_account_index)
+                        
                         # Thông báo hoàn thành job
+                        account_info = f" | 📱 {self.all_accounts[self.current_account_index]['name']}" if len(self.all_accounts) > 1 else ""
                         self.send_update(
                             f"✅ **HOÀN THÀNH JOB #{job_count}**\n\n"
                             f"{job_emoji} `{job_type.upper()}`\n"
                             f"💵 Nhận: `+{prices} VND`\n"
                             f"💰 Tổng: `{self.stats['coins_earned']} VND`\n"
-                            f"📊 Tổng jobs: `{job_count}`"
+                            f"📊 Tổng jobs: `{job_count}`{account_info}"
                         )
                         
                         consecutive_errors = 0  # Reset lỗi liên tiếp
@@ -239,15 +305,21 @@ class GolikeThreadsRunner:
 class GolikeInstagramRunner:
     """Chạy Golike Instagram automation"""
     
-    def __init__(self, token: str, callback: Optional[Callable] = None, cookie: str = '', delay_min: int = 10, delay_max: int = 18):
+    def __init__(self, token: str, callback: Optional[Callable] = None, cookie: str = '', delay_min: int = 10, delay_max: int = 18, auto_switch_account: bool = True):
         self.token = token
         self.callback = callback
         self.cookie = cookie
         self.delay_min = delay_min
         self.delay_max = delay_max
+        self.auto_switch_account = auto_switch_account
         self.stop_flag = False
         self.ses = requests.Session()
         self.stats = {'jobs_completed': 0, 'likes': 0, 'follows': 0, 'comments': 0, 'coins_earned': 0, 'errors': 0}
+        
+        # Multi-account support
+        self.all_accounts = []
+        self.current_account_index = 0
+        self.accounts_no_jobs = set()
         
         self.user_agents = [
             "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
@@ -300,21 +372,21 @@ class GolikeInstagramRunner:
                 self.send_update("❌ **LỖI**\n\nKhông tìm thấy Instagram account!\nThêm Instagram account vào Golike.")
                 return self.stats
             
+            # Lưu TẤT CẢ accounts
+            self.all_accounts = check_account['data']
+            
             # Hiển thị danh sách accounts
-            accounts_list = "📱 **DANH SÁCH TÀI KHOẢN INSTAGRAM**\n\n"
-            for idx, acc in enumerate(check_account['data'], 1):
-                accounts_list += f"{idx}. @{acc['instagram_username']} (ID: {acc['id']})\n"
+            if len(self.all_accounts) > 1:
+                accounts_list = "📱 **INSTAGRAM ACCOUNTS:**\n\n"
+                for idx, acc in enumerate(self.all_accounts, 1):
+                    accounts_list += f"{idx}. @{acc['instagram_username']} (ID: {acc['id']})\n"
+                accounts_list += f"\n{'🔄 Auto-switch: ON' if self.auto_switch_account else '⚠️ Auto-switch: OFF'}"
+                self.send_update(accounts_list)
             
-            # Lấy account đầu tiên (hoặc có thể cho user chọn sau)
-            account_id = check_account['data'][0]['id']
-            account_name = check_account['data'][0]['instagram_username']
-            
-            self.send_update(accounts_list)
-            self.send_update(f"📱 **Sử dụng account:** `@{account_name}` (ID: `{account_id}`)")
-            
-            # Kiểm tra cookie cho account này
-            cookie_status = "✅ Có cookie" if self.cookie else "⚠️ Không có cookie (chỉ claim job)"
-            self.send_update(f"🍪 Cookie status: {cookie_status}")
+            # Bắt đầu với account đầu tiên  
+            account_id = self.all_accounts[self.current_account_index]['id']
+            account_name = self.all_accounts[self.current_account_index]['instagram_username']
+            self.send_update(f"📱 **Đang dùng:** `@{account_name}` ({self.current_account_index + 1}/{len(self.all_accounts)})\n🍪 Cookie: {'✅ Có' if self.cookie else '⚠️ Không (chỉ claim)'}")
             
             # Bắt đầu
             if max_jobs:
@@ -337,10 +409,40 @@ class GolikeInstagramRunner:
                     
                     if job_response.get('status') != 200:
                         msg = job_response.get('message', 'Không có job')
-                        consecutive_errors += 1
-                        self.send_update(f"⚠️ `{msg}`\n\n⏳ Đợi 10s... (Lỗi {consecutive_errors}/5)")
-                        time.sleep(10)
-                        continue
+                        
+                        # Thử chuyển account nếu bật auto-switch
+                        if self.auto_switch_account and len(self.all_accounts) > 1:
+                            self.accounts_no_jobs.add(self.current_account_index)
+                            
+                            if len(self.accounts_no_jobs) < len(self.all_accounts):
+                                self.current_account_index = (self.current_account_index + 1) % len(self.all_accounts)
+                                while self.current_account_index in self.accounts_no_jobs:
+                                    self.current_account_index = (self.current_account_index + 1) % len(self.all_accounts)
+                                
+                                account_id = self.all_accounts[self.current_account_index]['id']
+                                account_name = self.all_accounts[self.current_account_index]['instagram_username']
+                                
+                                self.send_update(
+                                    f"🔄 **CHUYỂN ACCOUNT**\n\n"
+                                    f"@{self.all_accounts[(self.current_account_index - 1) % len(self.all_accounts)]['instagram_username']} hết jobs\n"
+                                    f"📱 Sang: @{account_name} ({self.current_account_index + 1}/{len(self.all_accounts)})"
+                                )
+                                time.sleep(3)
+                                continue
+                            else:
+                                self.send_update(f"⚠️ **TẤT CẢ {len(self.all_accounts)} ACCOUNTS HẾT JOBS**\n⏳ Đợi 30s...")
+                                time.sleep(30)
+                                self.accounts_no_jobs.clear()
+                                self.current_account_index = 0
+                                account_id = self.all_accounts[0]['id']
+                                account_name = self.all_accounts[0]['instagram_username']
+                                self.send_update(f"🔄 Reset - @{account_name}")
+                                continue
+                        else:
+                            consecutive_errors += 1
+                            self.send_update(f"⚠️ `{msg}`\n\n⏳ Đợi 10s... (Lỗi {consecutive_errors}/5)")
+                            time.sleep(10)
+                            continue
                     
                     consecutive_errors = 0
                     ads_id = job_response['data']['id']
@@ -424,11 +526,16 @@ class GolikeInstagramRunner:
                             self.stats['comments'] += 1
                         
                         job_count += 1
+                        
+                        if self.current_account_index in self.accounts_no_jobs:
+                            self.accounts_no_jobs.discard(self.current_account_index)
+                        
+                        account_info = f" | @{self.all_accounts[self.current_account_index]['instagram_username']}" if len(self.all_accounts) > 1 else ""
                         self.send_update(
                             f"✅ **JOB #{job_count} HOÀN THÀNH**\n\n"
                             f"{job_emoji} `{job_type.upper()}`\n"
                             f"💵 +`{prices} VND`\n"
-                            f"💰 Tổng: `{self.stats['coins_earned']} VND`"
+                            f"💰 Tổng: `{self.stats['coins_earned']} VND`{account_info}"
                         )
                     else:
                         self.stats['errors'] += 1
@@ -458,14 +565,20 @@ class GolikeInstagramRunner:
 class GolikeLinkedInRunner:
     """Chạy Golike LinkedIn automation"""
     
-    def __init__(self, token: str, callback: Optional[Callable] = None, delay_min: int = 10, delay_max: int = 18):
+    def __init__(self, token: str, callback: Optional[Callable] = None, delay_min: int = 10, delay_max: int = 18, auto_switch_account: bool = True):
         self.token = token
         self.callback = callback
         self.delay_min = delay_min
         self.delay_max = delay_max
+        self.auto_switch_account = auto_switch_account
         self.stop_flag = False
         self.ses = requests.Session()
         self.stats = {'jobs_completed': 0, 'likes': 0, 'follows': 0, 'coins_earned': 0, 'errors': 0}
+        
+        # Multi-account support
+        self.all_accounts = []
+        self.current_account_index = 0
+        self.accounts_no_jobs = set()
         
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -515,9 +628,20 @@ class GolikeLinkedInRunner:
                 self.send_update("❌ **LỖI**\n\nKhông có LinkedIn account!\nThêm account vào Golike.")
                 return self.stats
             
-            account_id = check_account['data'][0]['id']
-            account_name = check_account['data'][0]['link']
-            self.send_update(f"📱 **Account:** `{account_name}`")
+            # Lưu TẤT CẢ accounts
+            self.all_accounts = check_account['data']
+            
+            # Hiển thị danh sách
+            if len(self.all_accounts) > 1:
+                accounts_list = "📱 **LINKEDIN ACCOUNTS:**\n\n"
+                for idx, acc in enumerate(self.all_accounts, 1):
+                    accounts_list += f"{idx}. {acc.get('link', acc['id'])} (ID: {acc['id']})\n"
+                accounts_list += f"\n{'🔄 Auto-switch: ON' if self.auto_switch_account else '⚠️ Auto-switch: OFF'}"
+                self.send_update(accounts_list)
+            
+            account_id = self.all_accounts[self.current_account_index]['id']
+            account_name = self.all_accounts[self.current_account_index].get('link', f"ID-{account_id}")
+            self.send_update(f"📱 **Đang dùng:** `{account_name}` ({self.current_account_index + 1}/{len(self.all_accounts)})")
             
             if max_jobs:
                 self.send_update(f"🚀 **BẮT ĐẦU**\n\nTối đa {max_jobs} jobs")
@@ -538,10 +662,33 @@ class GolikeLinkedInRunner:
                     
                     if job_response.get('status') != 200:
                         msg = job_response.get('message', 'Không có job')
-                        consecutive_errors += 1
-                        self.send_update(f"⚠️ `{msg}`\n\n⏳ Đợi 10s...")
-                        time.sleep(10)
-                        continue
+                        
+                        if self.auto_switch_account and len(self.all_accounts) > 1:
+                            self.accounts_no_jobs.add(self.current_account_index)
+                            
+                            if len(self.accounts_no_jobs) < len(self.all_accounts):
+                                self.current_account_index = (self.current_account_index + 1) % len(self.all_accounts)
+                                while self.current_account_index in self.accounts_no_jobs:
+                                    self.current_account_index = (self.current_account_index + 1) % len(self.all_accounts)
+                                
+                                account_id = self.all_accounts[self.current_account_index]['id']
+                                account_name = self.all_accounts[self.current_account_index].get('link', f"ID-{account_id}")
+                                
+                                self.send_update(f"🔄 **CHUYỂN ACCOUNT**\n\n📱 Sang: {account_name} ({self.current_account_index + 1}/{len(self.all_accounts)})")
+                                time.sleep(3)
+                                continue
+                            else:
+                                self.send_update(f"⚠️ **TẤT CẢ {len(self.all_accounts)} ACCOUNTS HẾT JOBS**\n⏳ 30s...")
+                                time.sleep(30)
+                                self.accounts_no_jobs.clear()
+                                self.current_account_index = 0
+                                account_id = self.all_accounts[0]['id']
+                                continue
+                        else:
+                            consecutive_errors += 1
+                            self.send_update(f"⚠️ `{msg}`\n\n⏳ Đợi 10s...")
+                            time.sleep(10)
+                            continue
                     
                     consecutive_errors = 0
                     ads_id = job_response['data']['id']
@@ -570,11 +717,16 @@ class GolikeLinkedInRunner:
                             self.stats['likes'] += 1
                         
                         job_count += 1
+                        
+                        if self.current_account_index in self.accounts_no_jobs:
+                            self.accounts_no_jobs.discard(self.current_account_index)
+                        
+                        account_info = f" | {self.all_accounts[self.current_account_index].get('link', 'LinkedIn')}" if len(self.all_accounts) > 1 else ""
                         self.send_update(
                             f"✅ **JOB #{job_count} HOÀN THÀNH**\n\n"
                             f"{job_emoji} `{job_type.upper()}`\n"
                             f"💵 +`{prices} VND`\n"
-                            f"💰 `{self.stats['coins_earned']} VND`"
+                            f"💰 `{self.stats['coins_earned']} VND`{account_info}"
                         )
                     else:
                         self.stats['errors'] += 1

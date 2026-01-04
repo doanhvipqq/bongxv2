@@ -375,176 +375,8 @@ async def stop_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# === THREADS ONLY - Instagram & LinkedIn removed ===
 
-async def run_threads(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
-    
-    # Kiểm tra xem có tool nào đang chạy không
-    if user_id in running_tasks:
-        current_platform = running_tasks[user_id]['platform']
-        await update.message.reply_text(
-            f"⚠️ Tool {current_platform.title()} đang chạy!\n\n"
-            f"Sử dụng /stop để dừng trước khi chạy tool khác."
-        )
-        return
-    
-    # Lấy token
-    user_data = bot_manager.get_user_data(user_id_str)
-    token = user_data.get('instagram_token', '')
-    
-    if not token:
-        await update.message.reply_text(
-            "❌ **CHƯA CÓ TOKEN**\n\n"
-            "Bạn chưa cài đặt Authorization token cho Instagram.\n"
-            "Sử dụng /settings để cài đặt token.",
-            parse_mode='Markdown'
-        )
-        return
-    
-    # Lấy settings
-    cookie = user_data.get('instagram_cookie', '')
-    delay_min = user_data.get('instagram_delay_min', 10)
-    delay_max = user_data.get('instagram_delay_max', 18)
-    job_limit = user_data.get('instagram_job_limit', 20)
-    
-    # Thông báo nếu chưa có cookie
-    cookie_status = "✅ Có cookie" if cookie else "⚠️ Không có cookie (chỉ nhận job từ Golike)"
-    
-    # Bắt đầu task
-    running_tasks[user_id] = {
-        'platform': 'instagram',
-        'stop_flag': False,
-        'thread': None,
-        'start_time': time.time()
-    }
-    
-    await update.message.reply_text(
-        f"🚀 **BẮT ĐẦU TOOL INSTAGRAM**\n\n"
-        f"📸 Tool Instagram đang khởi động...\n\n"
-        f"⚙️ **Cấu hình:**\n"
-        f"• Jobs: `{job_limit if job_limit > 0 else 'Không giới hạn'}`\n"
-        f"• Delay: `{delay_min}-{delay_max}s`\n"
-        f"• Cookie: {cookie_status}\n\n"
-        f"⚡ Sử dụng `/config` để thay đổi cấu hình!",
-        parse_mode='Markdown'
-    )
-    
-    # Chạy tool trong background
-    async def run_instagram_task():
-        start_time = time.time()
-        
-        # CRITICAL FIX: Capture event loop before spawning thread
-        main_loop = asyncio.get_event_loop()
-        
-        # Callback để gửi updates từ worker thread
-        def send_update(msg: str):
-            try:
-                # Use the captured loop reference
-                future = asyncio.run_coroutine_threadsafe(
-                    context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown'),
-                    main_loop
-                )
-                # Wait for completion with timeout
-                future.result(timeout=10)
-            except Exception as e:
-                logger.error(f"Error sending update: {e}")
-        
-        # Tạo runner với settings từ user
-        runner = GolikeInstagramRunner(token, send_update, cookie, delay_min, delay_max)
-        running_tasks[user_id]['runner'] = runner
-        
-        # Chạy trong executor để không block - sử dụng job_limit
-        stats = await main_loop.run_in_executor(None, runner.run, job_limit if job_limit > 0 else None)
-        
-        # Tính thời gian
-        duration = int(time.time() - start_time)
-        stats['duration'] = f"{duration // 60}p {duration % 60}s"
-        
-        # Gửi thông báo hoàn thành
-        await send_completion_notification(context, user_id, 'instagram', stats)
-        await cleanup_task(user_id, 'instagram')
-    
-    # Chạy task
-    asyncio.create_task(run_instagram_task())
-
-async def run_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /linkedin - Chạy tool LinkedIn"""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
-    
-    if user_id in running_tasks:
-        current_platform = running_tasks[user_id]['platform']
-        await update.message.reply_text(
-            f"⚠️ Tool {current_platform.title()} đang chạy!\n\n"
-            f"Sử dụng /stop để dừng trước khi chạy tool khác."
-        )
-        return
-    
-    user_data = bot_manager.get_user_data(user_id_str)
-    token = user_data.get('linkedin_token', '')
-    
-    if not token:
-        await update.message.reply_text(
-            "❌ **CHƯA CÓ TOKEN**\n\n"
-            "Bạn chưa cài đặt Authorization token cho LinkedIn.\n"
-            "Sử dụng /settings để cài đặt token.",
-            parse_mode='Markdown'
-        )
-        return
-    
-    # Lấy settings
-    delay_min = user_data.get('linkedin_delay_min', 10)
-    delay_max = user_data.get('linkedin_delay_max', 18)
-    job_limit = user_data.get('linkedin_job_limit', 20)
-    
-    running_tasks[user_id] = {
-        'platform': 'linkedin',
-        'stop_flag': False,
-        'thread': None,
-        'start_time': time.time()
-    }
-    
-    await update.message.reply_text(
-        f"🚀 **BẮT ĐẦU TOOL LINKEDIN**\n\n"
-        f"💼 Tool LinkedIn đang khởi động...\n\n"
-        f"⚙️ **Cấu hình:**\n"
-        f"• Jobs: `{job_limit if job_limit > 0 else 'Không giới hạn'}`\n"
-        f"• Delay: `{delay_min}-{delay_max}s`\n\n"
-        f"⚡ Sử dụng `/config` để thay đổi!",
-        parse_mode='Markdown'
-    )
-    
-    async def run_linkedin_task():
-        start_time = time.time()
-        
-        # CRITICAL FIX: Capture event loop before spawning thread
-        main_loop = asyncio.get_event_loop()
-        
-        # Callback để gửi updates từ worker thread
-        def send_update(msg: str):
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown'),
-                    main_loop
-                )
-                future.result(timeout=10)
-            except Exception as e:
-                logger.error(f"Error sending update: {e}")
-        
-        runner = GolikeLinkedInRunner(token, send_update, delay_min, delay_max)
-        running_tasks[user_id]['runner'] = runner
-        
-        stats = await main_loop.run_in_executor(None, runner.run, job_limit if job_limit > 0 else None)
-        
-        duration = int(time.time() - start_time)
-        stats['duration'] = f"{duration // 60}p {duration % 60}s"
-        
-        await send_completion_notification(context, user_id, 'linkedin', stats)
-        await cleanup_task(user_id, 'linkedin')
-    
-    asyncio.create_task(run_linkedin_task())
+# === THREADS ONLY ===
 
 async def run_threads(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh /threads - Chạy tool Threads"""
@@ -610,7 +442,10 @@ async def run_threads(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Error sending update: {e}")
         
-        runner = GolikeThreadsRunner(token, send_update, delay_min, delay_max)
+        # Lấy auto_switch setting  
+        auto_switch = user_data.get('auto_switch_threads_account', True)
+        
+        runner = GolikeThreadsRunner(token, send_update, delay_min, delay_max, auto_switch)
         running_tasks[user_id]['runner'] = runner
         
         stats = await main_loop.run_in_executor(None, runner.run, job_limit if job_limit > 0 else None)  # Use job_limit
